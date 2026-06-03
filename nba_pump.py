@@ -3,7 +3,7 @@ import sys
 import time
 import logging
 from nba_api.live.nba.endpoints import scoreboard
-from supabase import create_client, Client
+from postgrest import SyncPostgrestClient
 
 # 1. Set up professional logging for GitHub Actions
 logging.basicConfig(
@@ -16,15 +16,20 @@ logger = logging.getLogger(__name__)
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
+# FALLBACK: If environment variables are empty, add your strings here:
 if not SUPABASE_URL or not SUPABASE_KEY:
-    logger.error("CRITICAL: SUPABASE_URL or SUPABASE_KEY environment variables are missing.")
+    SUPABASE_URL = "https://your-project-id.supabase.co/rest/v1"  # Keep /rest/v1 at the end!
+    SUPABASE_KEY = "your-anon-public-key"
+
+if "your-project-id" in SUPABASE_URL:
+    logger.error("CRITICAL: SUPABASE_URL or SUPABASE_KEY credentials are missing/unconfigured.")
     sys.exit(1)
 
-# 3. Initialize Supabase with error catching
+# 3. Initialize direct database connection
 try:
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    supabase = SyncPostgrestClient(SUPABASE_URL, headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"})
 except Exception as e:
-    logger.error(f"CRITICAL: Failed to initialize Supabase client. Error: {e}")
+    logger.error(f"CRITICAL: Failed to initialize database client. Error: {e}")
     sys.exit(1)
 
 # --- Helper Functions ---
@@ -69,7 +74,6 @@ def pump_live_nba_stats():
             away_team = game.get('awayTeam', {}).get('teamTricode', 'Away')
             logger.info(f"Processing Game: {away_team} @ {home_team} (ID: {game_id})")
             
-            # Safely combine home and away players
             home_players = game.get('homeTeam', {}).get('players', [])
             away_players = game.get('awayTeam', {}).get('players', [])
             all_players = home_players + away_players
@@ -83,7 +87,7 @@ def pump_live_nba_stats():
                 try:
                     stats = player.get('statistics', {})
                     if not stats:
-                        continue # Skip if the player has no stat block
+                        continue 
                         
                     minutes = safe_int(stats.get('minutesCalculated', 0))
                     
@@ -99,7 +103,7 @@ def pump_live_nba_stats():
                     if not player_id:
                         continue
 
-                    # Fire data to the Supabase Postgres Engine
+                    # Fire data directly via the custom Postgres RPC function call
                     supabase.rpc('update_player_stock_price', {
                         'p_player_id': safe_int(player_id),
                         'p_pts': safe_int(stats.get('points')),
@@ -118,11 +122,9 @@ def pump_live_nba_stats():
                     logger.info(f"   -> Successfully updated market for: {player_name}")
                     
                 except Exception as db_err:
-                    # If one player fails, it catches the error and moves to the next player
                     logger.info(f"   Skipped {player_name}: Not seeded in DB or mismatch. ({db_err})")
                     
         except Exception as game_err:
-            # If one game's data structure is broken, it catches it and moves to the next game
             logger.error(f"Critical error processing game {game_id}: {game_err}")
             continue 
 
