@@ -16,6 +16,14 @@ supabase = SyncPostgrestClient(SUPABASE_URL, headers={"apikey": SUPABASE_KEY, "A
 
 TARGET_SEASON = "2025-26"
 
+# --- PROXY CONFIGURATION (Authenticated with your Webshare credentials) ---
+# Proxy 1: 209.127.138.10:5784
+# (If you ever want to use Proxy 2, just change the IP to 38.154.185.97 and port to 6370)
+PROXIES = {
+    "http": "http://hvwewdoi:ibae046jb71v@209.127.138.10:5784",
+    "https": "http://hvwewdoi:ibae046jb71v@209.127.138.10:5784"
+}
+
 # --- NBA API ANTI-BLOCKING SPOOFED HEADERS ---
 headers = {
     'Host': 'stats.nba.com',
@@ -89,21 +97,22 @@ def run_pipeline_cycle():
 
         # 2. FETCH & PROCESS: Pull raw performance nodes from NBA API
         max_retries = 3
-        retry_delay = 2.0
+        retry_delay = 3.0
         for attempt in range(max_retries):
             try:
-                # Upgraded with custom anti-bot headers and increased timeout limit
+                # FIXED: Now routing through authenticated Webshare proxy to mask cloud IPs
                 dash = playerdashboardbyyearoveryear.PlayerDashboardByYearOverYear(
                     player_id=player_id, 
                     timeout=25, 
-                    headers=headers
+                    headers=headers,
+                    proxy=PROXIES
                 )
                 yoy_dict = dash.by_year_player_dashboard.get_dict()
                 
                 all_time_array = []
                 processed_seasons = set()
                 has_played_this_season = False
-                new_calculated_price = 1.00 # Base Default Fallback
+                new_calculated_price = 1.00 
                 
                 if yoy_dict and yoy_dict['data']:
                     headers_list = yoy_dict['headers']
@@ -112,7 +121,6 @@ def run_pipeline_cycle():
                     for row in reversed(yoy_dict['data']):
                         season_label = row[h_map['GROUP_VALUE']]
                         
-                        # Deduplicate trade splits (e.g. Jeff Green)
                         if season_label in processed_seasons:
                             continue
                             
@@ -134,14 +142,12 @@ def run_pipeline_cycle():
                             all_time_array.append({"x": season_label, "y": season_price})
                             processed_seasons.add(season_label)
                             
-                            # If row represents the active processing window, extract as new global base price
                             if season_label == TARGET_SEASON:
                                 new_calculated_price = season_price
                                 has_played_this_season = True
 
                 # 3. MODIFY ARRAYS: Apply conditional timeline mutations
                 if not has_played_this_season:
-                    # Flatline Rule: No active season logs -> enforce absolute flat graph points
                     day_array = [{"x": t, "y": new_calculated_price} for t in ["9:30 AM", "11:30 AM", "1:30 PM", "3:30 PM", "4:00 PM"]]
                     week_array = [{"x": d, "y": new_calculated_price} for d in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]]
                     month_array = [{"x": w, "y": new_calculated_price} for w in ["Week 1", "Week 2", "Week 3", "Week 4"]]
@@ -149,28 +155,23 @@ def run_pipeline_cycle():
                     if not all_time_array:
                         all_time_array = [{"x": TARGET_SEASON, "y": new_calculated_price}]
                 else:
-                    # Active Appending Rule: Grab prior lists, inject new point, slice queue limits
                     current_time_str = datetime.now().strftime("%I:%M %p")
                     current_day_str = datetime.now().strftime("%a")
                     
-                    # Update Intraday Ticker List
                     day_array = existing_history.get("day", [])
                     if not isinstance(day_array, list): day_array = []
                     day_array.append({"x": current_time_str, "y": new_calculated_price})
                     if len(day_array) > 15: day_array.pop(0)
                     
-                    # Update Weekly Ticker List (Deduplicated by day name)
                     week_array = existing_history.get("week", [])
                     if not isinstance(week_array, list): week_array = []
                     if not week_array or week_array[-1].get("x") != current_day_str:
                         week_array.append({"x": current_day_str, "y": new_calculated_price})
                     if len(week_array) > 7: week_array.pop(0)
                     
-                    # Carry forward month/year frameworks or initialize defaults
                     month_array = existing_history.get("month") or [{"x": w, "y": new_calculated_price} for w in ["Week 1", "Week 2", "Week 3", "Week 4"]]
                     year_array = existing_history.get("year") or [{"x": m, "y": new_calculated_price} for m in ["Oct", "Dec", "Feb", "Apr", "Jun"]]
 
-                # Bundle Unified Structural Payload Container
                 history_payload = {
                     "day": day_array,
                     "week": week_array,
@@ -179,29 +180,27 @@ def run_pipeline_cycle():
                     "all_time": all_time_array
                 }
                 
-                # Recompute related tracking variables
                 market_cap = round(new_calculated_price * shares, 2)
 
-                # 4. WRITE: Transmit structural updates in a single network round-trip payload transaction
+                # 4. WRITE: Transmit structural updates to Supabase
                 supabase.table('players').update({
                     "current_price": new_calculated_price,
                     "market_cap": market_cap,
                     "past_price_history": history_payload
                 }).eq('id', player_id).execute()
                 
-                print(f" Success! (${new_calculated_price} | Career Nodes: {len(all_time_array)})")
+                print(f" Success! (${new_calculated_price})")
                 
-                # Dynamic random jitter delay to keep the firewall happy
-                time.sleep(random.uniform(1.5, 3.2)) 
+                # A slightly longer human-like jitter delay so we don't burn the proxy IP fast
+                time.sleep(random.uniform(2.0, 4.0)) 
                 break
                 
             except Exception as e:
                 if attempt == max_retries - 1:
                     print(f" Failed after max connectivity retries: {e}")
                 else:
-                    # Adaptive cooldown backoff penalty if a request lags
                     wait_time = retry_delay * (attempt + 1) * random.uniform(1.5, 2.5)
-                    print(f" Connection timeout. Cooling down for {round(wait_time, 1)}s...", end="", flush=True)
+                    print(f" Proxy lag/Timeout. Cooldown for {round(wait_time, 1)}s...", end="", flush=True)
                     time.sleep(wait_time)
 
     print(f"--- Pipeline Execution Cycle Completed Successfully ---")
