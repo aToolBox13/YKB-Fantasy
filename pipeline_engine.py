@@ -5,7 +5,7 @@ import math
 import random
 from datetime import datetime
 from nba_api.stats.static import players
-from nba_api.stats.endpoints import playerdashboardbyyearoveryear
+from nba_api.stats.endpoints import playergamelog
 from postgrest import SyncPostgrestClient
 
 # Database Credentials
@@ -14,114 +14,174 @@ SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJ
 
 supabase = SyncPostgrestClient(SUPABASE_URL, headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"})
 
-TARGET_SEASON = "2025-26"
+CURRENT_SEASON = "2025-26"
 
-# --- SYSTEM ENVIRONMENT INJECTION ---
-# This forces Python's core networking layer to route everything through the proxy automatically
-proxy_string = "http://hvwewdoi:ibae046jb71v@38.154.185.97:6370"
-os.environ["HTTP_PROXY"] = proxy_string
-os.environ["HTTPS_PROXY"] = proxy_string
+# --- PROXY POOL FOR ENVIRONMENT INJECTION ---
+PROXY_POOL = [
+    "http://hvwewdoi:ibae046jb71v@38.154.203.95:5863",
+    "http://hvwewdoi:ibae046jb71v@198.105.121.200:6462",
+    "http://hvwewdoi:ibae046jb71v@64.137.96.74:6641",
+    "http://hvwewdoi:ibae046jb71v@209.127.138.10:5784",
+    "http://hvwewdoi:ibae046jb71v@38.154.185.97:6370"
+]
+selected_proxy = random.choice(PROXY_POOL)
+os.environ["HTTP_PROXY"] = selected_proxy
+os.environ["HTTPS_PROXY"] = selected_proxy
 
-def calculate_pure_box_price(pts, ast, reb, stl, blk, fg_pct, fg3m, min_pg, gp):
-    if gp < 3 or min_pg < 5:
+def calculate_pure_box_price(pts, ast, reb, stl, blk, fg_pct, fg3m, min_pg, gp=1):
+    """Evaluates raw performance stats from a game log to determine true asset price."""
+    if min_pg < 5:
         return 1.00
+
     volume_score = (pts * 1.0) + (ast * 1.35) + (reb * 0.75) + (stl * 2.0) + (blk * 2.0) + (fg3m * 0.7)
     efficiency_bonus = fg_pct * 6.0
     raw_metric = volume_score + efficiency_bonus
+    
     scale_factor = raw_metric / 22.5
     minutes_modifier = 1.0 if min_pg >= 25.0 else math.sqrt(min_pg / 25.0)
-    gp_modifier = 1.0 if gp >= 20 else (0.80 + (gp / 20.0) * 0.20)
-    calculated_price = 85.00 * scale_factor * minutes_modifier * gp_modifier
+    
+    calculated_price = 85.00 * scale_factor * minutes_modifier
+
     if min_pg < 13.0:
         calculated_price = min(calculated_price, 35.00)
     elif min_pg < 20 and raw_metric < 15.0:
         calculated_price = min(calculated_price, 65.00)
+
     return max(1.00, round(calculated_price, 2))
 
 def run_pipeline_cycle():
-    print(f"--- Pipeline Execution Started via Proxy Routing ---")
+    print(f"--- Gameday Processing Pipeline Initialized: {datetime.now().strftime('%Y-%m-%d')} ---")
     active_players = players.get_active_players()
     total_players = len(active_players)
     
+    # Get today's localized comparison date code formatted like 'JUN 05, 2026'
+    today_str = datetime.now().strftime("%b %d, %Y").upper()
+
     for idx, player in enumerate(active_players):
         player_id = player['id']
         full_name = player['full_name']
         
-        print(f"[{idx+1}/{total_players}] Syncing: {full_name}...", end="", flush=True)
-        
+        # 1. READ DATABASE ENTRY
         try:
             db_query = supabase.table('players').select('current_price', 'past_price_history', 'shares_outstanding').eq('id', player_id).execute()
             if not db_query.data:
-                print(" Skipped.")
                 continue
+                
             player_row = db_query.data[0]
             shares = int(player_row.get('shares_outstanding', 25000000))
-            existing_history = player_row.get('past_price_history') or {"day": [], "week": [], "month": [], "year": [], "all_time": []}
+            current_stored_price = float(player_row.get('current_price', 1.00))
+            existing_history = player_row.get('past_price_history') or {
+                "day": [], "week": [], "month": [], "year": [], "all_time": []
+            }
         except Exception as e:
-            print(f" DB Error: {e}")
+            print(f" Database Access Fault: {e}")
             continue
 
+        # 2. HARVEST LIVE LOGS WITH RETRY PROTECTION
+        game_stats = None
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                # Clean call: no internal proxy parameter needed because of lines 19-21
-                dash = playerdashboardbyyearoveryear.PlayerDashboardByYearOverYear(player_id=player_id, timeout=15)
-                yoy_dict = dash.by_year_player_dashboard.get_dict()
+                # Force checking both regular season and playoffs log entries
+                log_fetch = playergamelog.PlayerGameLog(
+                    player_id=player_id, 
+                    season=CURRENT_SEASON, 
+                    season_type_all_star='Playoffs', # Captures active playoff series nodes
+                    timeout=12
+                )
+                log_dict = log_fetch.get_dict()
                 
-                all_time_array = []
-                processed_seasons = set()
-                has_played_this_season = False
-                new_calculated_price = 1.00 
-                
-                if yoy_dict and yoy_dict['data']:
-                    h_map = {header: i for i, header in enumerate(yoy_dict['headers'])}
-                    for row in reversed(yoy_dict['data']):
-                        season_label = row[h_map['GROUP_VALUE']]
-                        if season_label in processed_seasons: continue
-                        h_gp = row[h_map['GP']]
-                        if h_gp and h_gp > 0:
-                            season_price = calculate_pure_box_price(
-                                row[h_map['PTS']]/h_gp, row[h_map['AST']]/h_gp, row[h_map['REB']]/h_gp,
-                                row[h_map['STL']]/h_gp, row[h_map['BLK']]/h_gp, row[h_map['TRACKING_REB_PCT'] if 'TRACKING_REB_PCT' in h_map else h_map['FG_PCT']],
-                                row[h_map['FG3M']]/h_gp, row[h_map['MIN']]/h_gp, h_gp
-                            )
-                            all_time_array.append({"x": season_label, "y": season_price})
-                            processed_seasons.add(season_label)
-                            if season_label == TARGET_SEASON:
-                                new_calculated_price = season_price
-                                has_played_this_season = True
+                # Fallback to Regular Season logs if Playoffs container comes back empty
+                if not log_dict['resultSets'][0]['rowSet']:
+                    log_fetch = playergamelog.PlayerGameLog(
+                        player_id=player_id, 
+                        season=CURRENT_SEASON, 
+                        season_type_all_star='Regular Season', 
+                        timeout=12
+                    )
+                    log_dict = log_fetch.get_dict()
 
-                if not has_played_this_season:
-                    day_array = [{"x": t, "y": new_calculated_price} for t in ["9:30 AM", "11:30 AM", "1:30 PM", "3:30 PM", "4:00 PM"]]
-                    week_array = [{"x": d, "y": new_calculated_price} for d in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]]
-                    month_array = [{"x": w, "y": new_calculated_price} for w in ["Week 1", "Week 2", "Week 3", "Week 4"]]
-                    year_array = [{"x": m, "y": new_calculated_price} for m in ["Oct", "Dec", "Feb", "Apr", "Jun"]]
-                    if not all_time_array: all_time_array = [{"x": TARGET_SEASON, "y": new_calculated_price}]
-                else:
-                    day_array = existing_history.get("day", [])
-                    day_array.append({"x": datetime.now().strftime("%I:%M %p"), "y": new_calculated_price})
-                    if len(day_array) > 15: day_array.pop(0)
-                    week_array = existing_history.get("week", [])
-                    if not week_array or week_array[-1].get("x") != datetime.now().strftime("%a"):
-                        week_array.append({"x": datetime.now().strftime("%a"), "y": new_calculated_price})
-                    if len(week_array) > 7: week_array.pop(0)
-                    month_array = existing_history.get("month") or [{"x": w, "y": new_calculated_price} for w in ["Week 1", "Week 2", "Week 3", "Week 4"]]
-                    year_array = existing_history.get("year") or [{"x": m, "y": new_calculated_price} for m in ["Oct", "Dec", "Feb", "Apr", "Jun"]]
-
-                supabase.table('players').update({
-                    "current_price": new_calculated_price,
-                    "market_cap": round(new_calculated_price * shares, 2),
-                    "past_price_history": {"day": day_array, "week": week_array, "month": month_array, "year": year_array, "all_time": all_time_array}
-                }).eq('id', player_id).execute()
-                
-                print(f" Success! (${new_calculated_price})")
-                time.sleep(random.uniform(1.5, 3.0)) 
+                if log_dict['resultSets'] and log_dict['resultSets'][0]['rowSet']:
+                    data_rows = log_dict['resultSets'][0]['rowSet']
+                    headers_list = log_dict['resultSets'][0]['headers']
+                    h_map = {header: i for i, header in enumerate(headers_list)}
+                    
+                    # Inspect the most recent single game entry played
+                    latest_game = data_rows[0]
+                    game_date = latest_game[h_map['GAME_DATE']] # e.g. 'JUN 04, 2026'
+                    
+                    # Match found: Player was active on the floor today
+                    if game_date == today_str:
+                        game_stats = {
+                            "pts": latest_game[h_map['PTS']],
+                            "ast": latest_game[h_map['AST']],
+                            "reb": latest_game[h_map['REB']],
+                            "stl": latest_game[h_map['STL']],
+                            "blk": latest_game[h_map['BLK']],
+                            "fg3m": latest_game[h_map['FG3M']],
+                            "fg_pct": latest_game[h_map['FG_PCT']] if latest_game[h_map['FG_PCT']] else 0.0,
+                            "min": float(latest_game[h_map['MIN']]) if latest_game[h_map['MIN']] else 0.0
+                        }
                 break
-            except Exception as e:
-                if attempt == max_retries - 1:
-                    print(f" Skipped (API Block).")
-                else:
-                    time.sleep(3)
+            except Exception:
+                time.sleep(2)
+
+        # 3. MUTATE AND EXECUTE CORRESPONDING LOGIC
+        if game_stats:
+            # Player active: Run formula to establish the upgraded price point
+            new_price = calculate_pure_box_price(
+                game_stats["pts"], game_stats["ast"], game_stats["reb"],
+                game_stats["stl"], game_stats["blk"], game_stats["fg_pct"],
+                game_stats["fg3m"], game_stats["min"]
+            )
+            print(f"[{idx+1}/{total_players}] {full_name} played today! Price updated: ${current_stored_price} -> ${new_price}")
+        else:
+            # Player inactive: Preserve existing base seed pricing data safely
+            new_price = current_stored_price
+            print(f"[{idx+1}/{total_players}] {full_name} idle. Preserving seed baseline.")
+
+        # 4. STRUCTURAL TIMELINE ARRAY PROCESSING
+        current_time_str = datetime.now().strftime("%I:%M %p")
+        current_day_str = datetime.now().strftime("%a")
+        
+        day_array = existing_history.get("day") or []
+        if not isinstance(day_array, list): day_array = []
+        day_array.append({"x": current_time_str, "y": new_price})
+        if len(day_array) > 15: day_array.pop(0)
+        
+        week_array = existing_history.get("week") or []
+        if not isinstance(week_array, list): week_array = []
+        if not week_array or week_array[-1].get("x") != current_day_str:
+            week_array.append({"x": current_day_str, "y": new_price})
+        else:
+            week_array[-1]["y"] = new_price # Continually override with latest calculation if same day
+        if len(week_array) > 7: week_array.pop(0)
+        
+        month_array = existing_history.get("month") or [{"x": "W1", "y": new_price}]
+        year_array = existing_history.get("year") or [{"x": "M1", "y": new_price}]
+        all_time_array = existing_history.get("all_time") or [{"x": CURRENT_SEASON, "y": new_price}]
+
+        history_payload = {
+            "day": day_array,
+            "week": week_array,
+            "month": month_array,
+            "year": year_array,
+            "all_time": all_time_array
+        }
+
+        # 5. DATABASE TRANSIT SYNC
+        try:
+            supabase.table('players').update({
+                "current_price": new_price,
+                "market_cap": round(new_price * shares, 2),
+                "past_price_history": history_payload
+            }).eq('id', player_id).execute()
+        except Exception as e:
+            print(f" Sync failure on payload execution: {e}")
+
+        time.sleep(random.uniform(1.0, 2.2))
+
+    print("--- Gameday Processing Pipeline Cycle Completed Successfully ---")
 
 if __name__ == "__main__":
     run_pipeline_cycle()
