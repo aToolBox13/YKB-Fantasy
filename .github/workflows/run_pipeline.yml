@@ -1,34 +1,34 @@
 name: NBA Stock Market Update Pipeline
 
-# 1. When should this script run?
+# Controls when the action will run
 on:
   schedule:
-    # This is a CRON schedule. '0 4 * * *' means it runs automatically every single day at 4:00 AM UTC.
-    - cron: '0 4 * * *'
+    # Triggers automatically every single day at 6:00 AM UTC (11:00 PM PST)
+    - cron: '0 6 * * *'
   workflow_dispatch:
-    # This line is crucial! It adds a manual "Run Workflow" button in GitHub so you can test it whenever you want.
+    # Keeps your manual button active so you can test it whenever you want!
 
 jobs:
   run-pipeline:
-    runs-on: ubuntu-latest # Tells GitHub to use a fresh Linux virtual machine
+    runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Copy your repository code (pipeline_engine.py) onto the GitHub cloud computer
+      # Step 1: Clone your repository code onto the virtual runner
       - name: Check out repository code
         uses: actions/checkout@v3
 
-      # Step 2: Install Python on the GitHub cloud computer
+      # Step 2: Set up a reliable Python environment
       - name: Set up Python Environment
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
-      # Step 3: Open the cloud command prompt and install your database/API tools
+      # Step 3: Install dependencies with strict versioning to prevent connection failures
       - name: Install Project Dependencies
         run: |
-          pip install nba_api postgrest
+          pip install "urllib3<2.0" nba_api postgrest
 
-      # Step 4: Run the actual script just like you would on your own terminal prompt!
+      # Step 4: Run the unified execution script to update both price and history
       - name: Execute Pipeline Engine Transaction
         run: |
           python pipeline_engine.py
