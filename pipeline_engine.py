@@ -16,6 +16,20 @@ supabase = SyncPostgrestClient(SUPABASE_URL, headers={"apikey": SUPABASE_KEY, "A
 
 TARGET_SEASON = "2025-26"
 
+# --- NBA API ANTI-BLOCKING SPOOFED HEADERS ---
+headers = {
+    'Host': 'stats.nba.com',
+    'Connection': 'keep-alive',
+    'Cache-Control': 'max-age=0',
+    'Upgrade-Insecure-Requests': '1',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Referer': 'https://www.nba.com/',
+    'Origin': 'https://www.nba.com'
+}
+
 def calculate_pure_box_price(pts, ast, reb, stl, blk, fg_pct, fg3m, min_pg, gp):
     """Your core mathematical evaluation formula."""
     if gp < 3 or min_pg < 5:
@@ -75,10 +89,15 @@ def run_pipeline_cycle():
 
         # 2. FETCH & PROCESS: Pull raw performance nodes from NBA API
         max_retries = 3
-        retry_delay = 1.5
+        retry_delay = 2.0
         for attempt in range(max_retries):
             try:
-                dash = playerdashboardbyyearoveryear.PlayerDashboardByYearOverYear(player_id=player_id, timeout=12)
+                # Upgraded with custom anti-bot headers and increased timeout limit
+                dash = playerdashboardbyyearoveryear.PlayerDashboardByYearOverYear(
+                    player_id=player_id, 
+                    timeout=25, 
+                    headers=headers
+                )
                 yoy_dict = dash.by_year_player_dashboard.get_dict()
                 
                 all_time_array = []
@@ -87,13 +106,13 @@ def run_pipeline_cycle():
                 new_calculated_price = 1.00 # Base Default Fallback
                 
                 if yoy_dict and yoy_dict['data']:
-                    headers = yoy_dict['headers']
-                    h_map = {header: i for i, header in enumerate(headers)}
+                    headers_list = yoy_dict['headers']
+                    h_map = {header: i for i, header in enumerate(headers_list)}
                     
                     for row in reversed(yoy_dict['data']):
                         season_label = row[h_map['GROUP_VALUE']]
                         
-                        # Deduplicate trades
+                        # Deduplicate trade splits (e.g. Jeff Green)
                         if season_label in processed_seasons:
                             continue
                             
@@ -140,7 +159,7 @@ def run_pipeline_cycle():
                     day_array.append({"x": current_time_str, "y": new_calculated_price})
                     if len(day_array) > 15: day_array.pop(0)
                     
-                    # Update Weekly Ticker List (Deduplicated by day name to prevent overflow script stacking)
+                    # Update Weekly Ticker List (Deduplicated by day name)
                     week_array = existing_history.get("week", [])
                     if not isinstance(week_array, list): week_array = []
                     if not week_array or week_array[-1].get("x") != current_day_str:
@@ -151,7 +170,7 @@ def run_pipeline_cycle():
                     month_array = existing_history.get("month") or [{"x": w, "y": new_calculated_price} for w in ["Week 1", "Week 2", "Week 3", "Week 4"]]
                     year_array = existing_history.get("year") or [{"x": m, "y": new_calculated_price} for m in ["Oct", "Dec", "Feb", "Apr", "Jun"]]
 
-                # Assemble Unified Structural Payload Container
+                # Bundle Unified Structural Payload Container
                 history_payload = {
                     "day": day_array,
                     "week": week_array,
@@ -171,16 +190,19 @@ def run_pipeline_cycle():
                 }).eq('id', player_id).execute()
                 
                 print(f" Success! (${new_calculated_price} | Career Nodes: {len(all_time_array)})")
-                time.sleep(0.6) # Standard NBA API connection request throttling buffer
+                
+                # Dynamic random jitter delay to keep the firewall happy
+                time.sleep(random.uniform(1.5, 3.2)) 
                 break
                 
             except Exception as e:
                 if attempt == max_retries - 1:
                     print(f" Failed after max connectivity retries: {e}")
                 else:
-                    print(" Connection timeout, retrying channel...", end="", flush=True)
-                    time.sleep(retry_delay)
-                    retry_delay *= 2
+                    # Adaptive cooldown backoff penalty if a request lags
+                    wait_time = retry_delay * (attempt + 1) * random.uniform(1.5, 2.5)
+                    print(f" Connection timeout. Cooling down for {round(wait_time, 1)}s...", end="", flush=True)
+                    time.sleep(wait_time)
 
     print(f"--- Pipeline Execution Cycle Completed Successfully ---")
 
