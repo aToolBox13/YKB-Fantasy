@@ -4,7 +4,6 @@ import time
 import math
 import random
 from datetime import datetime
-import requests
 from nba_api.stats.static import players
 from nba_api.stats.endpoints import playerdashboardbyyearoveryear
 from postgrest import SyncPostgrestClient
@@ -17,66 +16,30 @@ supabase = SyncPostgrestClient(SUPABASE_URL, headers={"apikey": SUPABASE_KEY, "A
 
 TARGET_SEASON = "2025-26"
 
-# --- FULL PROXY POOL ROTATION (Preloaded from your Webshare dashboard) ---
-PROXY_POOL = [
-    {"http": "http://hvwewdoi:ibae046jb71v@38.154.203.95:5863", "https": "http://hvwewdoi:ibae046jb71v@38.154.203.95:5863"},
-    {"http": "http://hvwewdoi:ibae046jb71v@198.105.121.200:6462", "https": "http://hvwewdoi:ibae046jb71v@198.105.121.200:6462"},
-    {"http": "http://hvwewdoi:ibae046jb71v@64.137.96.74:6641", "https": "http://hvwewdoi:ibae046jb71v@64.137.96.74:6641"},
-    {"http": "http://hvwewdoi:ibae046jb71v@209.127.138.10:5784", "https": "http://hvwewdoi:ibae046jb71v@209.127.138.10:5784"},
-    {"http": "http://hvwewdoi:ibae046jb71v@38.154.185.97:6370", "https": "http://hvwewdoi:ibae046jb71v@38.154.185.97:6370"},
-    {"http": "http://hvwewdoi:ibae046jb71v@84.247.60.125:6095", "https": "http://hvwewdoi:ibae046jb71v@84.247.60.125:6095"},
-    {"http": "http://hvwewdoi:ibae046jb71v@142.111.67.146:5611", "https": "http://hvwewdoi:ibae046jb71v@142.111.67.146:5611"},
-    {"http": "http://hvwewdoi:ibae046jb71v@191.96.254.138:6185", "https": "http://hvwewdoi:ibae046jb71v@191.96.254.138:6185"},
-    {"http": "http://hvwewdoi:ibae046jb71v@31.58.9.4:6077", "https": "http://hvwewdoi:ibae046jb71v@31.58.9.4:6077"},
-    {"http": "http://hvwewdoi:ibae046jb71v@104.239.107.47:5699", "https": "http://hvwewdoi:ibae046jb71v@104.239.107.47:5699"}
-]
-
-# --- NBA API ANTI-BLOCKING SPOOFED HEADERS ---
-headers = {
-    'Host': 'stats.nba.com',
-    'Connection': 'keep-alive',
-    'Cache-Control': 'max-age=0',
-    'Upgrade-Insecure-Requests': '1',
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-    'Accept-Encoding': 'gzip, deflate, br',
-    'Accept-Language': 'en-US,en;q=0.9',
-    'Referer': 'https://www.nba.com/',
-    'Origin': 'https://www.nba.com'
-}
+# --- SYSTEM ENVIRONMENT INJECTION ---
+# This forces Python's core networking layer to route everything through the proxy automatically
+proxy_string = "http://hvwewdoi:ibae046jb71v@38.154.185.97:6370"
+os.environ["HTTP_PROXY"] = proxy_string
+os.environ["HTTPS_PROXY"] = proxy_string
 
 def calculate_pure_box_price(pts, ast, reb, stl, blk, fg_pct, fg3m, min_pg, gp):
-    """Your core mathematical evaluation formula."""
     if gp < 3 or min_pg < 5:
         return 1.00
-
     volume_score = (pts * 1.0) + (ast * 1.35) + (reb * 0.75) + (stl * 2.0) + (blk * 2.0) + (fg3m * 0.7)
     efficiency_bonus = fg_pct * 6.0
     raw_metric = volume_score + efficiency_bonus
-    
-    anchor_starter_score = 22.5
-    scale_factor = raw_metric / anchor_starter_score
-
-    if min_pg >= 25.0:
-        minutes_modifier = 1.0
-    else:
-        minutes_modifier = math.sqrt(min_pg / 25.0)
-        
+    scale_factor = raw_metric / 22.5
+    minutes_modifier = 1.0 if min_pg >= 25.0 else math.sqrt(min_pg / 25.0)
     gp_modifier = 1.0 if gp >= 20 else (0.80 + (gp / 20.0) * 0.20)
-    final_multiplier = scale_factor * minutes_modifier * gp_modifier
-
-    market_anchor_price = 85.00
-    calculated_price = market_anchor_price * final_multiplier
-
+    calculated_price = 85.00 * scale_factor * minutes_modifier * gp_modifier
     if min_pg < 13.0:
         calculated_price = min(calculated_price, 35.00)
     elif min_pg < 20 and raw_metric < 15.0:
         calculated_price = min(calculated_price, 65.00)
-
     return max(1.00, round(calculated_price, 2))
 
 def run_pipeline_cycle():
-    print(f"--- Pipeline Execution Cycle Started: {datetime.now()} ---")
+    print(f"--- Pipeline Execution Started via Proxy Routing ---")
     active_players = players.get_active_players()
     total_players = len(active_players)
     
@@ -84,45 +47,25 @@ def run_pipeline_cycle():
         player_id = player['id']
         full_name = player['full_name']
         
-        print(f"[{idx+1}/{total_players}] Syncing asset metrics for: {full_name}...", end="", flush=True)
+        print(f"[{idx+1}/{total_players}] Syncing: {full_name}...", end="", flush=True)
         
-        # 1. READ: Pull existing database record state
         try:
             db_query = supabase.table('players').select('current_price', 'past_price_history', 'shares_outstanding').eq('id', player_id).execute()
             if not db_query.data:
-                print(" Profile omitted (not in database roster). Skipping.")
+                print(" Skipped.")
                 continue
-                
             player_row = db_query.data[0]
             shares = int(player_row.get('shares_outstanding', 25000000))
-            existing_history = player_row.get('past_price_history') or {
-                "day": [], "week": [], "month": [], "year": [], "all_time": []
-            }
+            existing_history = player_row.get('past_price_history') or {"day": [], "week": [], "month": [], "year": [], "all_time": []}
         except Exception as e:
-            print(f" Database read block error: {e}")
+            print(f" DB Error: {e}")
             continue
 
-        # 2. FETCH & PROCESS: Pull raw performance nodes from NBA API
-        max_retries = 5  # Increased retries to maximize proxy rotation potential
-        retry_delay = 1.5
-        
+        max_retries = 3
         for attempt in range(max_retries):
-            # Select a random proxy from your 10 active endpoints
-            selected_proxy = random.choice(PROXY_POOL)
-            
             try:
-                # Create a persistent session context containing the proxy configurations
-                session = requests.Session()
-                session.proxies.update(selected_proxy)
-                session.headers.update(headers)
-                
-                # Request stats using explicit proxy-injected session tracking
-                dash = playerdashboardbyyearoveryear.PlayerDashboardByYearOverYear(
-                    player_id=player_id, 
-                    timeout=15, 
-                    proxy=selected_proxy['http'], # Bind network stream to proxy channel
-                    headers=headers
-                )
+                # Clean call: no internal proxy parameter needed because of lines 19-21
+                dash = playerdashboardbyyearoveryear.PlayerDashboardByYearOverYear(player_id=player_id, timeout=15)
                 yoy_dict = dash.by_year_player_dashboard.get_dict()
                 
                 all_time_array = []
@@ -131,96 +74,54 @@ def run_pipeline_cycle():
                 new_calculated_price = 1.00 
                 
                 if yoy_dict and yoy_dict['data']:
-                    headers_list = yoy_dict['headers']
-                    h_map = {header: i for i, header in enumerate(headers_list)}
-                    
+                    h_map = {header: i for i, header in enumerate(yoy_dict['headers'])}
                     for row in reversed(yoy_dict['data']):
                         season_label = row[h_map['GROUP_VALUE']]
-                        
-                        if season_label in processed_seasons:
-                            continue
-                            
+                        if season_label in processed_seasons: continue
                         h_gp = row[h_map['GP']]
                         if h_gp and h_gp > 0:
-                            h_pts = row[h_map['PTS']] / h_gp
-                            h_ast = row[h_map['AST']] / h_gp
-                            h_reb = row[h_map['REB']] / h_gp
-                            h_stl = row[h_map['STL']] / h_gp
-                            h_blk = row[h_map['BLK']] / h_gp
-                            h_fg3m = row[h_map['FG3M']] / h_gp
-                            h_min = row[h_map['MIN']] / h_gp
-                            h_fg_pct = row[h_map['FG_PCT']] if row[h_map['FG_PCT']] else 0.0
-                            
                             season_price = calculate_pure_box_price(
-                                h_pts, h_ast, h_reb, h_stl, h_blk, h_fg_pct, h_fg3m, h_min, h_gp
+                                row[h_map['PTS']]/h_gp, row[h_map['AST']]/h_gp, row[h_map['REB']]/h_gp,
+                                row[h_map['STL']]/h_gp, row[h_map['BLK']]/h_gp, row[h_map['TRACKING_REB_PCT'] if 'TRACKING_REB_PCT' in h_map else h_map['FG_PCT']],
+                                row[h_map['FG3M']]/h_gp, row[h_map['MIN']]/h_gp, h_gp
                             )
-                            
                             all_time_array.append({"x": season_label, "y": season_price})
                             processed_seasons.add(season_label)
-                            
                             if season_label == TARGET_SEASON:
                                 new_calculated_price = season_price
                                 has_played_this_season = True
 
-                # 3. MODIFY ARRAYS: Apply conditional timeline mutations
                 if not has_played_this_season:
                     day_array = [{"x": t, "y": new_calculated_price} for t in ["9:30 AM", "11:30 AM", "1:30 PM", "3:30 PM", "4:00 PM"]]
                     week_array = [{"x": d, "y": new_calculated_price} for d in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]]
                     month_array = [{"x": w, "y": new_calculated_price} for w in ["Week 1", "Week 2", "Week 3", "Week 4"]]
                     year_array = [{"x": m, "y": new_calculated_price} for m in ["Oct", "Dec", "Feb", "Apr", "Jun"]]
-                    if not all_time_array:
-                        all_time_array = [{"x": TARGET_SEASON, "y": new_calculated_price}]
+                    if not all_time_array: all_time_array = [{"x": TARGET_SEASON, "y": new_calculated_price}]
                 else:
-                    current_time_str = datetime.now().strftime("%I:%M %p")
-                    current_day_str = datetime.now().strftime("%a")
-                    
                     day_array = existing_history.get("day", [])
-                    if not isinstance(day_array, list): day_array = []
-                    day_array.append({"x": current_time_str, "y": new_calculated_price})
+                    day_array.append({"x": datetime.now().strftime("%I:%M %p"), "y": new_calculated_price})
                     if len(day_array) > 15: day_array.pop(0)
-                    
                     week_array = existing_history.get("week", [])
-                    if not isinstance(week_array, list): week_array = []
-                    if not week_array or week_array[-1].get("x") != current_day_str:
-                        week_array.append({"x": current_day_str, "y": new_calculated_price})
+                    if not week_array or week_array[-1].get("x") != datetime.now().strftime("%a"):
+                        week_array.append({"x": datetime.now().strftime("%a"), "y": new_calculated_price})
                     if len(week_array) > 7: week_array.pop(0)
-                    
                     month_array = existing_history.get("month") or [{"x": w, "y": new_calculated_price} for w in ["Week 1", "Week 2", "Week 3", "Week 4"]]
                     year_array = existing_history.get("year") or [{"x": m, "y": new_calculated_price} for m in ["Oct", "Dec", "Feb", "Apr", "Jun"]]
 
-                history_payload = {
-                    "day": day_array,
-                    "week": week_array,
-                    "month": month_array,
-                    "year": year_array,
-                    "all_time": all_time_array
-                }
-                
-                market_cap = round(new_calculated_price * shares, 2)
-
-                # 4. WRITE: Transmit structural updates to Supabase
                 supabase.table('players').update({
                     "current_price": new_calculated_price,
-                    "market_cap": market_cap,
-                    "past_price_history": history_payload
+                    "market_cap": round(new_calculated_price * shares, 2),
+                    "past_price_history": {"day": day_array, "week": week_array, "month": month_array, "year": year_array, "all_time": all_time_array}
                 }).eq('id', player_id).execute()
                 
                 print(f" Success! (${new_calculated_price})")
-                
-                # Standard human delay interval
-                time.sleep(random.uniform(1.0, 2.2)) 
+                time.sleep(random.uniform(1.5, 3.0)) 
                 break
-                
             except Exception as e:
                 if attempt == max_retries - 1:
-                    print(f" Failed after max connectivity retries: {e}")
+                    print(f" Skipped (API Block).")
                 else:
-                    # Switch proxy immediately if an issue arises
-                    wait_time = retry_delay * random.uniform(1.0, 1.8)
-                    print(f" Proxy connection issue. Rotating IP and waiting {round(wait_time, 1)}s...", end="", flush=True)
-                    time.sleep(wait_time)
-
-    print(f"--- Pipeline Execution Cycle Completed Successfully ---")
+                    time.sleep(3)
 
 if __name__ == "__main__":
     run_pipeline_cycle()
