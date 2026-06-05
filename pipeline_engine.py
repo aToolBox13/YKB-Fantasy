@@ -4,6 +4,7 @@ import time
 import math
 import random
 from datetime import datetime
+import requests
 from nba_api.stats.static import players
 from nba_api.stats.endpoints import playerdashboardbyyearoveryear
 from postgrest import SyncPostgrestClient
@@ -16,13 +17,19 @@ supabase = SyncPostgrestClient(SUPABASE_URL, headers={"apikey": SUPABASE_KEY, "A
 
 TARGET_SEASON = "2025-26"
 
-# --- PROXY CONFIGURATION (Authenticated with your Webshare credentials) ---
-# Proxy 1: 209.127.138.10:5784
-# (If you ever want to use Proxy 2, just change the IP to 38.154.185.97 and port to 6370)
-PROXIES = {
-    "http": "http://hvwewdoi:ibae046jb71v@209.127.138.10:5784",
-    "https": "http://hvwewdoi:ibae046jb71v@209.127.138.10:5784"
-}
+# --- FULL PROXY POOL ROTATION (Preloaded from your Webshare dashboard) ---
+PROXY_POOL = [
+    {"http": "http://hvwewdoi:ibae046jb71v@38.154.203.95:5863", "https": "http://hvwewdoi:ibae046jb71v@38.154.203.95:5863"},
+    {"http": "http://hvwewdoi:ibae046jb71v@198.105.121.200:6462", "https": "http://hvwewdoi:ibae046jb71v@198.105.121.200:6462"},
+    {"http": "http://hvwewdoi:ibae046jb71v@64.137.96.74:6641", "https": "http://hvwewdoi:ibae046jb71v@64.137.96.74:6641"},
+    {"http": "http://hvwewdoi:ibae046jb71v@209.127.138.10:5784", "https": "http://hvwewdoi:ibae046jb71v@209.127.138.10:5784"},
+    {"http": "http://hvwewdoi:ibae046jb71v@38.154.185.97:6370", "https": "http://hvwewdoi:ibae046jb71v@38.154.185.97:6370"},
+    {"http": "http://hvwewdoi:ibae046jb71v@84.247.60.125:6095", "https": "http://hvwewdoi:ibae046jb71v@84.247.60.125:6095"},
+    {"http": "http://hvwewdoi:ibae046jb71v@142.111.67.146:5611", "https": "http://hvwewdoi:ibae046jb71v@142.111.67.146:5611"},
+    {"http": "http://hvwewdoi:ibae046jb71v@191.96.254.138:6185", "https": "http://hvwewdoi:ibae046jb71v@191.96.254.138:6185"},
+    {"http": "http://hvwewdoi:ibae046jb71v@31.58.9.4:6077", "https": "http://hvwewdoi:ibae046jb71v@31.58.9.4:6077"},
+    {"http": "http://hvwewdoi:ibae046jb71v@104.239.107.47:5699", "https": "http://hvwewdoi:ibae046jb71v@104.239.107.47:5699"}
+]
 
 # --- NBA API ANTI-BLOCKING SPOOFED HEADERS ---
 headers = {
@@ -96,16 +103,25 @@ def run_pipeline_cycle():
             continue
 
         # 2. FETCH & PROCESS: Pull raw performance nodes from NBA API
-        max_retries = 3
-        retry_delay = 3.0
+        max_retries = 5  # Increased retries to maximize proxy rotation potential
+        retry_delay = 1.5
+        
         for attempt in range(max_retries):
+            # Select a random proxy from your 10 active endpoints
+            selected_proxy = random.choice(PROXY_POOL)
+            
             try:
-                # FIXED: Now routing through authenticated Webshare proxy to mask cloud IPs
+                # Create a persistent session context containing the proxy configurations
+                session = requests.Session()
+                session.proxies.update(selected_proxy)
+                session.headers.update(headers)
+                
+                # Request stats using explicit proxy-injected session tracking
                 dash = playerdashboardbyyearoveryear.PlayerDashboardByYearOverYear(
                     player_id=player_id, 
-                    timeout=25, 
-                    headers=headers,
-                    proxy=PROXIES
+                    timeout=15, 
+                    proxy=selected_proxy['http'], # Bind network stream to proxy channel
+                    headers=headers
                 )
                 yoy_dict = dash.by_year_player_dashboard.get_dict()
                 
@@ -191,16 +207,17 @@ def run_pipeline_cycle():
                 
                 print(f" Success! (${new_calculated_price})")
                 
-                # A slightly longer human-like jitter delay so we don't burn the proxy IP fast
-                time.sleep(random.uniform(2.0, 4.0)) 
+                # Standard human delay interval
+                time.sleep(random.uniform(1.0, 2.2)) 
                 break
                 
             except Exception as e:
                 if attempt == max_retries - 1:
                     print(f" Failed after max connectivity retries: {e}")
                 else:
-                    wait_time = retry_delay * (attempt + 1) * random.uniform(1.5, 2.5)
-                    print(f" Proxy lag/Timeout. Cooldown for {round(wait_time, 1)}s...", end="", flush=True)
+                    # Switch proxy immediately if an issue arises
+                    wait_time = retry_delay * random.uniform(1.0, 1.8)
+                    print(f" Proxy connection issue. Rotating IP and waiting {round(wait_time, 1)}s...", end="", flush=True)
                     time.sleep(wait_time)
 
     print(f"--- Pipeline Execution Cycle Completed Successfully ---")
