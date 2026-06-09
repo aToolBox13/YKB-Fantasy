@@ -149,7 +149,6 @@ def run_pipeline_cycle():
                 print(f"[{idx+1}/{total_players}] Segment check: Seed baseline conserved for inactive roster pools.")
 
         # 4. STRUCTURAL TIMELINE ARRAY PROCESSING
-       # 4. STRUCTURAL TIMELINE ARRAY PROCESSING
         current_time_str = pacific_now.strftime("%I:%M %p")
         current_day_str = pacific_now.strftime("%a")
         
@@ -157,3 +156,41 @@ def run_pipeline_cycle():
         if not isinstance(day_array, list): day_array = []
         day_array.append({"x": current_time_str, "y": new_price})
         if len(day_array) > 15: day_array.pop(0)
+
+        week_array = existing_history.get("week") or []
+        if not isinstance(week_array, list): week_array = []
+        if not week_array or week_array[-1].get("x") != current_day_str:
+            week_array.append({"x": current_day_str, "y": new_price})
+        else:
+            week_array[-1]["y"] = new_price
+        if len(week_array) > 7: week_array.pop(0)
+        
+        month_array = existing_history.get("month") or [{"x": "W1", "y": new_price}]
+        year_array = existing_history.get("year") or [{"x": "M1", "y": new_price}]
+        all_time_array = existing_history.get("all_time") or [{"x": CURRENT_SEASON, "y": new_price}]
+
+        history_payload = {
+            "day": day_array,
+            "week": week_array,
+            "month": month_array,
+            "year": year_array,
+            "all_time": all_time_array
+        }
+
+        # 5. DATABASE TRANSIT SYNC
+        try:
+            supabase.table('players').update({
+                "current_price": new_price,
+                "market_cap": round(new_price * shares, 2),
+                "past_price_history": history_payload
+            }).eq('id', player_id).execute()
+        except Exception as e:
+            print(f" Sync failure on payload execution: {e}")
+
+        time.sleep(random.uniform(1.0, 2.2))
+
+    print("--- Gameday Processing Pipeline Cycle Completed Successfully ---")
+
+# 👇 THE EXECUTION RUN TRIGGER (ADD THIS BACK IN) 👇
+if __name__ == "__main__":
+    run_pipeline_cycle
