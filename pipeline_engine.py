@@ -54,8 +54,9 @@ def run_pipeline_cycle():
     active_players = players.get_active_players()
     total_players = len(active_players)
     
-    # Get today's localized comparison date code formatted like 'JUN 05, 2026'
-    today_str = datetime.now().strftime("%b %d, %Y").upper()
+    # FIX: Remove .upper() so it matches standard title-case API dates ('Jun 08, 2026')
+    today_str = datetime.now().strftime("%b %d, %Y")
+    print(f"[DEBUG] System targeted sync date code: '{today_str}'")
 
     for idx, player in enumerate(active_players):
         player_id = player['id']
@@ -86,7 +87,7 @@ def run_pipeline_cycle():
                 log_fetch = playergamelog.PlayerGameLog(
                     player_id=player_id, 
                     season=CURRENT_SEASON, 
-                    season_type_all_star='Playoffs', # Captures active playoff series nodes
+                    season_type_all_star='Playoffs', 
                     timeout=12
                 )
                 log_dict = log_fetch.get_dict()
@@ -106,12 +107,15 @@ def run_pipeline_cycle():
                     headers_list = log_dict['resultSets'][0]['headers']
                     h_map = {header: i for i, header in enumerate(headers_list)}
                     
-                    # Inspect the most recent single game entry played
                     latest_game = data_rows[0]
-                    game_date = latest_game[h_map['GAME_DATE']] # e.g. 'JUN 04, 2026'
+                    game_date = latest_game[h_map['GAME_DATE']] # e.g. 'Jun 04, 2026'
                     
-                    # Match found: Player was active on the floor today
-                    if game_date == today_str:
+                    # 👇 ADDED RAW API PRINT LOG FOR TROUBLESHOOTING 👇
+                    if idx % 50 == 0:  # Sample prints every 50 players to keep actions logs scannable
+                        print(f"[API CHECK] {full_name} most recent game in logs found on date: '{game_date}'")
+                    
+                    # FIX: Apply case-insensitive strip matching to bypass formatting issues
+                    if game_date.strip().lower() == today_str.strip().lower():
                         game_stats = {
                             "pts": latest_game[h_map['PTS']],
                             "ast": latest_game[h_map['AST']],
@@ -128,7 +132,6 @@ def run_pipeline_cycle():
 
         # 3. MUTATE AND EXECUTE CORRESPONDING LOGIC
         if game_stats:
-            # Player active: Run formula to establish the upgraded price point
             new_price = calculate_pure_box_price(
                 game_stats["pts"], game_stats["ast"], game_stats["reb"],
                 game_stats["stl"], game_stats["blk"], game_stats["fg_pct"],
@@ -136,9 +139,10 @@ def run_pipeline_cycle():
             )
             print(f"[{idx+1}/{total_players}] {full_name} played today! Price updated: ${current_stored_price} -> ${new_price}")
         else:
-            # Player inactive: Preserve existing base seed pricing data safely
             new_price = current_stored_price
-            print(f"[{idx+1}/{total_players}] {full_name} idle. Preserving seed baseline.")
+            # Keeps tracking explicit on loop patterns
+            if idx % 40 == 0:
+                print(f"[{idx+1}/{total_players}] Sync baseline conserved for player segments.")
 
         # 4. STRUCTURAL TIMELINE ARRAY PROCESSING
         current_time_str = datetime.now().strftime("%I:%M %p")
@@ -154,7 +158,7 @@ def run_pipeline_cycle():
         if not week_array or week_array[-1].get("x") != current_day_str:
             week_array.append({"x": current_day_str, "y": new_price})
         else:
-            week_array[-1]["y"] = new_price # Continually override with latest calculation if same day
+            week_array[-1]["y"] = new_price
         if len(week_array) > 7: week_array.pop(0)
         
         month_array = existing_history.get("month") or [{"x": "W1", "y": new_price}]
