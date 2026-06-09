@@ -28,14 +28,8 @@ jobs:
         run: |
           pip install "urllib3<2.0" nba_api postgrest pytz
 
-      # Step 4: Run diagnostic check and execute pipeline transaction
+      # Step 4: Run your seeding script to populate the database
+    # Step 4: Run your seeding script to populate the database
       - name: Execute Pipeline Engine Transaction
         run: |
-          echo "=== RUNNER DIAGNOSTICS ==="
-          pwd
-          echo "--- Files Present ---"
-          ls -la
-          echo "--- Script File Tail End View ---"
-          tail -n 10 pipeline_engine.py || echo "Target file missing or unreadable!"
-          echo "=== RUNNING ENGINE ==="
-          python pipeline_engine.py
+          python nba_seed.py
