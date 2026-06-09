@@ -61,11 +61,17 @@ def run_pipeline_cycle():
     if FORCE_MATCH_TEST:
         print("[⚠️ WARNING] FORCE_MATCH_TEST is enabled. Roster pricing calculations will run on historical baselines.")
         
+    print("[DEBUG] Attempting to fetch active players from nba_api...")
     active_players = players.get_active_players()
     total_players = len(active_players)
+    print(f"[DEBUG] Total active players found in nba_api: {total_players}")
     
     today_str = pacific_now.strftime("%b %d, %Y")
     print(f"[DEBUG] Target Pacific Sync Date String: '{today_str}'")
+
+    if total_players == 0:
+        print("[🚨 CRITICAL] The player roster array is empty! The API returned zero active players.")
+        return
 
     for idx, player in enumerate(active_players):
         player_id = player['id']
@@ -75,6 +81,8 @@ def run_pipeline_cycle():
         try:
             db_query = supabase.table('players').select('current_price', 'past_price_history', 'shares_outstanding').eq('id', player_id).execute()
             if not db_query.data:
+                if idx % 50 == 0:
+                    print(f" [DEBUG] Player {full_name} ({player_id}) not found in your Supabase table. Skipping.")
                 continue
                 
             player_row = db_query.data[0]
@@ -92,7 +100,6 @@ def run_pipeline_cycle():
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                # Try getting playoffs log
                 log_fetch = playergamelog.PlayerGameLog(
                     player_id=player_id, 
                     season=CURRENT_SEASON, 
@@ -102,7 +109,6 @@ def run_pipeline_cycle():
                 log_dict = log_fetch.get_dict()
                 data_rows = log_dict['resultSets'][0]['rowSet']
                 
-                # If playoffs log is empty, instantly switch to regular season log
                 if not data_rows:
                     log_fetch = playergamelog.PlayerGameLog(
                         player_id=player_id, 
@@ -147,7 +153,8 @@ def run_pipeline_cycle():
             print(f"[{idx+1}/{total_players}] {full_name} processed! Price: ${current_stored_price} -> ${new_price}")
         else:
             new_price = current_stored_price
-            print(f"[{idx+1}/{total_players}] {full_name} marked idle. Price conserved.")
+            if idx % 50 == 0:
+                print(f"[{idx+1}/{total_players}] {full_name} marked idle. Price conserved.")
 
         # 4. STRUCTURAL TIMELINE ARRAY PROCESSING
         current_time_str = pacific_now.strftime("%I:%M %p")
