@@ -3,7 +3,7 @@ name: NBA Stock Market Update Pipeline
 # Controls when the action will run
 on:
   schedule:
-    # Triggers automatically every single day at 7:00 AM UTC (11:00 PM PST / 12:00 AM PDT)
+    # Triggers automatically every single day at 7:00 AM UTC (11:00 PM PST)
     - cron: '0 7 * * *'
   workflow_dispatch:
     # Keeps your manual button active so you can test it whenever you want!
@@ -23,12 +23,19 @@ jobs:
         with:
           python-version: '3.10'
 
-      # Step 3: Install dependencies (Added pytz for precise Pacific Time syncing)
+      # Step 3: Install dependencies (Included pytz for precise Pacific Time syncing)
       - name: Install Project Dependencies
         run: |
           pip install "urllib3<2.0" nba_api postgrest pytz
 
-      # Step 4: Run the unified execution script to update both price and history
+      # Step 4: Run diagnostic check and execute pipeline transaction
       - name: Execute Pipeline Engine Transaction
         run: |
+          echo "=== RUNNER DIAGNOSTICS ==="
+          pwd
+          echo "--- Files Present ---"
+          ls -la
+          echo "--- Script File Tail End View ---"
+          tail -n 10 pipeline_engine.py || echo "Target file missing or unreadable!"
+          echo "=== RUNNING ENGINE ==="
           python pipeline_engine.py
