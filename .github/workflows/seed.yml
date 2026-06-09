@@ -1,0 +1,30 @@
+name: NBA Database Baseline Seeding
+
+on:
+  workflow_dispatch:
+    # Explicitly provides the manual trigger play button in your Actions panel
+
+jobs:
+  execute-seeding:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Secure the environment and download code files
+      - name: Checkout Code Repository
+        uses: actions/checkout@v3
+
+      # Step 2: Establish a stable Python virtual host
+      - name: Initialize Python 3.10 Runtime
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      # Step 3: Mount necessary packages used by your seed script
+      - name: Install Runtime Dependencies
+        run: |
+          pip install "urllib3<2.0" nba_api postgrest
+
+      # Step 4: Run your explicit seed file and output progress logs
+      - name: Execute Seeding Script
+        run: |
+          python nba_seed.py
