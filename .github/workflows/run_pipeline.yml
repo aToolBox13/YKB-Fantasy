@@ -4,7 +4,7 @@ name: NBA Stock Market Update Pipeline
 on:
   schedule:
     # Triggers automatically every single day at 6:00 AM UTC (11:00 PM PST)
-    - cron: '0 6 * * *'
+    - cron: '0 7 * * *'
   workflow_dispatch:
     # Keeps your manual button active so you can test it whenever you want!
 
