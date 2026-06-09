@@ -17,6 +17,9 @@ supabase = SyncPostgrestClient(SUPABASE_URL, headers={"apikey": SUPABASE_KEY, "A
 
 CURRENT_SEASON = "2025-26"
 
+# 🛠️ TESTING OVERRIDE: Set to True to force price updates using the latest historical game row
+FORCE_MATCH_TEST = True 
+
 # --- PROXY POOL FOR ENVIRONMENT INJECTION ---
 PROXY_POOL = [
     "http://hvwewdoi:ibae046jb71v@38.154.203.95:5863",
@@ -56,6 +59,9 @@ def run_pipeline_cycle():
     pacific_now = datetime.now(pacific_tz)
     
     print(f"--- Gameday Processing Pipeline Initialized (Pacific Time): {pacific_now.strftime('%Y-%m-%d %I:%M %p')} ---")
+    if FORCE_MATCH_TEST:
+        print("[⚠️ WARNING] FORCE_MATCH_TEST is enabled. Roster pricing calculations will run on historical baselines.")
+        
     active_players = players.get_active_players()
     total_players = len(active_players)
     
@@ -113,14 +119,14 @@ def run_pipeline_cycle():
                     h_map = {header: i for i, header in enumerate(headers_list)}
                     
                     latest_game = data_rows[0]
-                    game_date = latest_game[h_map['GAME_DATE']] # Returns format like 'Jun 08, 2026'
+                    game_date = latest_game[h_map['GAME_DATE']] # Returns format like 'Jun 04, 2026'
                     
                     # Log monitoring sample interval to keep terminal actions scannable
                     if idx % 50 == 0:
                         print(f"[API CHECK] {full_name} most recent game row date: '{game_date}'")
                     
-                    # Target comparison logic using cleaned, stripped matching parameters
-                    if game_date.strip().lower() == today_str.strip().lower():
+                    # Target comparison logic — forced bypass matching if testing parameter is engaged
+                    if FORCE_MATCH_TEST or (game_date.strip().lower() == today_str.strip().lower()):
                         game_stats = {
                             "pts": latest_game[h_map['PTS']],
                             "ast": latest_game[h_map['AST']],
@@ -142,7 +148,7 @@ def run_pipeline_cycle():
                 game_stats["stl"], game_stats["blk"], game_stats["fg_pct"],
                 game_stats["fg3m"], game_stats["min"]
             )
-            print(f"[{idx+1}/{total_players}] {full_name} match verified! Price updated: ${current_stored_price} -> ${new_price}")
+            print(f"[{idx+1}/{total_players}] {full_name} match processed! Price updated: ${current_stored_price} -> ${new_price}")
         else:
             new_price = current_stored_price
             if idx % 40 == 0:
@@ -191,6 +197,5 @@ def run_pipeline_cycle():
 
     print("--- Gameday Processing Pipeline Cycle Completed Successfully ---")
 
-# 👇 THE EXECUTION RUN TRIGGER (ADD THIS BACK IN) 👇
 if __name__ == "__main__":
     run_pipeline_cycle()
