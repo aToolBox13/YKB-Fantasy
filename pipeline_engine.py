@@ -149,9 +149,11 @@ def run_pipeline_cycle():
                 print(f"[{idx+1}/{total_players}] Segment check: Seed baseline conserved for inactive roster pools.")
 
         # 4. STRUCTURAL TIMELINE ARRAY PROCESSING
+       # 4. STRUCTURAL TIMELINE ARRAY PROCESSING
         current_time_str = pacific_now.strftime("%I:%M %p")
         current_day_str = pacific_now.strftime("%a")
         
         day_array = existing_history.get("day") or []
         if not isinstance(day_array, list): day_array = []
-        day_array.append({"x": current
+        day_array.append({"x": current_time_str, "y": new_price})
+        if len(day_array) > 15: day_array.pop(0)
