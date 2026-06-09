@@ -4,6 +4,7 @@ import time
 import math
 import random
 from datetime import datetime
+import pytz  # Handles server-to-local timezone calibration
 from nba_api.stats.static import players
 from nba_api.stats.endpoints import playergamelog
 from postgrest import SyncPostgrestClient
@@ -50,19 +51,23 @@ def calculate_pure_box_price(pts, ast, reb, stl, blk, fg_pct, fg3m, min_pg, gp=1
     return max(1.00, round(calculated_price, 2))
 
 def run_pipeline_cycle():
-    print(f"--- Gameday Processing Pipeline Initialized: {datetime.now().strftime('%Y-%m-%d')} ---")
+    # Set up US/Pacific tracking baseline explicitly
+    pacific_tz = pytz.timezone('US/Pacific')
+    pacific_now = datetime.now(pacific_tz)
+    
+    print(f"--- Gameday Processing Pipeline Initialized (Pacific Time): {pacific_now.strftime('%Y-%m-%d %I:%M %p')} ---")
     active_players = players.get_active_players()
     total_players = len(active_players)
     
-    # FIX: Remove .upper() so it matches standard title-case API dates ('Jun 08, 2026')
-    today_str = datetime.now().strftime("%b %d, %Y")
-    print(f"[DEBUG] System targeted sync date code: '{today_str}'")
+    # Generate targeted search string to safely match NBA Title-Cased Date Strings
+    today_str = pacific_now.strftime("%b %d, %Y")
+    print(f"[DEBUG] Target Pacific Sync Date String: '{today_str}'")
 
     for idx, player in enumerate(active_players):
         player_id = player['id']
         full_name = player['full_name']
         
-        # 1. READ DATABASE ENTRY
+        # 1. READ DATABASE ENTRY FROM SUPABASE
         try:
             db_query = supabase.table('players').select('current_price', 'past_price_history', 'shares_outstanding').eq('id', player_id).execute()
             if not db_query.data:
@@ -75,7 +80,7 @@ def run_pipeline_cycle():
                 "day": [], "week": [], "month": [], "year": [], "all_time": []
             }
         except Exception as e:
-            print(f" Database Access Fault: {e}")
+            print(f" Database Access Fault for {full_name}: {e}")
             continue
 
         # 2. HARVEST LIVE LOGS WITH RETRY PROTECTION
@@ -83,7 +88,7 @@ def run_pipeline_cycle():
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                # Force checking both regular season and playoffs log entries
+                # Prioritize Active Playoff Nodes
                 log_fetch = playergamelog.PlayerGameLog(
                     player_id=player_id, 
                     season=CURRENT_SEASON, 
@@ -108,13 +113,13 @@ def run_pipeline_cycle():
                     h_map = {header: i for i, header in enumerate(headers_list)}
                     
                     latest_game = data_rows[0]
-                    game_date = latest_game[h_map['GAME_DATE']] # e.g. 'Jun 04, 2026'
+                    game_date = latest_game[h_map['GAME_DATE']] # Returns format like 'Jun 08, 2026'
                     
-                    # 👇 ADDED RAW API PRINT LOG FOR TROUBLESHOOTING 👇
-                    if idx % 50 == 0:  # Sample prints every 50 players to keep actions logs scannable
-                        print(f"[API CHECK] {full_name} most recent game in logs found on date: '{game_date}'")
+                    # Log monitoring sample interval to keep terminal actions scannable
+                    if idx % 50 == 0:
+                        print(f"[API CHECK] {full_name} most recent game row date: '{game_date}'")
                     
-                    # FIX: Apply case-insensitive strip matching to bypass formatting issues
+                    # Target comparison logic using cleaned, stripped matching parameters
                     if game_date.strip().lower() == today_str.strip().lower():
                         game_stats = {
                             "pts": latest_game[h_map['PTS']],
@@ -130,62 +135,23 @@ def run_pipeline_cycle():
             except Exception:
                 time.sleep(2)
 
-        # 3. MUTATE AND EXECUTE CORRESPONDING LOGIC
+        # 3. VALUATION MATRIX ASSESSMENT
         if game_stats:
             new_price = calculate_pure_box_price(
                 game_stats["pts"], game_stats["ast"], game_stats["reb"],
                 game_stats["stl"], game_stats["blk"], game_stats["fg_pct"],
                 game_stats["fg3m"], game_stats["min"]
             )
-            print(f"[{idx+1}/{total_players}] {full_name} played today! Price updated: ${current_stored_price} -> ${new_price}")
+            print(f"[{idx+1}/{total_players}] {full_name} match verified! Price updated: ${current_stored_price} -> ${new_price}")
         else:
             new_price = current_stored_price
-            # Keeps tracking explicit on loop patterns
             if idx % 40 == 0:
-                print(f"[{idx+1}/{total_players}] Sync baseline conserved for player segments.")
+                print(f"[{idx+1}/{total_players}] Segment check: Seed baseline conserved for inactive roster pools.")
 
         # 4. STRUCTURAL TIMELINE ARRAY PROCESSING
-        current_time_str = datetime.now().strftime("%I:%M %p")
-        current_day_str = datetime.now().strftime("%a")
+        current_time_str = pacific_now.strftime("%I:%M %p")
+        current_day_str = pacific_now.strftime("%a")
         
         day_array = existing_history.get("day") or []
         if not isinstance(day_array, list): day_array = []
-        day_array.append({"x": current_time_str, "y": new_price})
-        if len(day_array) > 15: day_array.pop(0)
-        
-        week_array = existing_history.get("week") or []
-        if not isinstance(week_array, list): week_array = []
-        if not week_array or week_array[-1].get("x") != current_day_str:
-            week_array.append({"x": current_day_str, "y": new_price})
-        else:
-            week_array[-1]["y"] = new_price
-        if len(week_array) > 7: week_array.pop(0)
-        
-        month_array = existing_history.get("month") or [{"x": "W1", "y": new_price}]
-        year_array = existing_history.get("year") or [{"x": "M1", "y": new_price}]
-        all_time_array = existing_history.get("all_time") or [{"x": CURRENT_SEASON, "y": new_price}]
-
-        history_payload = {
-            "day": day_array,
-            "week": week_array,
-            "month": month_array,
-            "year": year_array,
-            "all_time": all_time_array
-        }
-
-        # 5. DATABASE TRANSIT SYNC
-        try:
-            supabase.table('players').update({
-                "current_price": new_price,
-                "market_cap": round(new_price * shares, 2),
-                "past_price_history": history_payload
-            }).eq('id', player_id).execute()
-        except Exception as e:
-            print(f" Sync failure on payload execution: {e}")
-
-        time.sleep(random.uniform(1.0, 2.2))
-
-    print("--- Gameday Processing Pipeline Cycle Completed Successfully ---")
-
-if __name__ == "__main__":
-    run_pipeline_cycle()
+        day_array.append({"x": current
