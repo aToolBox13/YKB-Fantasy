@@ -193,4 +193,4 @@ def run_pipeline_cycle():
 
 # 👇 THE EXECUTION RUN TRIGGER (ADD THIS BACK IN) 👇
 if __name__ == "__main__":
-    run_pipeline_cycle
+    run_pipeline_cycle()
