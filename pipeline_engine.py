@@ -54,7 +54,6 @@ def calculate_pure_box_price(pts, ast, reb, stl, blk, fg_pct, fg3m, min_pg, gp=1
     return max(1.00, round(calculated_price, 2))
 
 def run_pipeline_cycle():
-    # Set up US/Pacific tracking baseline explicitly
     pacific_tz = pytz.timezone('US/Pacific')
     pacific_now = datetime.now(pacific_tz)
     
@@ -65,7 +64,6 @@ def run_pipeline_cycle():
     active_players = players.get_active_players()
     total_players = len(active_players)
     
-    # Generate targeted search string to safely match NBA Title-Cased Date Strings
     today_str = pacific_now.strftime("%b %d, %Y")
     print(f"[DEBUG] Target Pacific Sync Date String: '{today_str}'")
 
@@ -94,7 +92,7 @@ def run_pipeline_cycle():
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                # Prioritize Active Playoff Nodes
+                # Try getting playoffs log
                 log_fetch = playergamelog.PlayerGameLog(
                     player_id=player_id, 
                     season=CURRENT_SEASON, 
@@ -102,9 +100,10 @@ def run_pipeline_cycle():
                     timeout=12
                 )
                 log_dict = log_fetch.get_dict()
+                data_rows = log_dict['resultSets'][0]['rowSet']
                 
-                # Fallback to Regular Season logs if Playoffs container comes back empty
-                if not log_dict['resultSets'][0]['rowSet']:
+                # If playoffs log is empty, instantly switch to regular season log
+                if not data_rows:
                     log_fetch = playergamelog.PlayerGameLog(
                         player_id=player_id, 
                         season=CURRENT_SEASON, 
@@ -112,20 +111,15 @@ def run_pipeline_cycle():
                         timeout=12
                     )
                     log_dict = log_fetch.get_dict()
-
-                if log_dict['resultSets'] and log_dict['resultSets'][0]['rowSet']:
                     data_rows = log_dict['resultSets'][0]['rowSet']
+
+                if data_rows:
                     headers_list = log_dict['resultSets'][0]['headers']
                     h_map = {header: i for i, header in enumerate(headers_list)}
                     
                     latest_game = data_rows[0]
-                    game_date = latest_game[h_map['GAME_DATE']] # Returns format like 'Jun 04, 2026'
+                    game_date = latest_game[h_map['GAME_DATE']]
                     
-                    # Log monitoring sample interval to keep terminal actions scannable
-                    if idx % 50 == 0:
-                        print(f"[API CHECK] {full_name} most recent game row date: '{game_date}'")
-                    
-                    # Target comparison logic — forced bypass matching if testing parameter is engaged
                     if FORCE_MATCH_TEST or (game_date.strip().lower() == today_str.strip().lower()):
                         game_stats = {
                             "pts": latest_game[h_map['PTS']],
@@ -138,8 +132,10 @@ def run_pipeline_cycle():
                             "min": float(latest_game[h_map['MIN']]) if latest_game[h_map['MIN']] else 0.0
                         }
                 break
-            except Exception:
-                time.sleep(2)
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    print(f" [API ERROR] Failed to harvest data logs for {full_name}: {e}")
+                time.sleep(1)
 
         # 3. VALUATION MATRIX ASSESSMENT
         if game_stats:
@@ -148,11 +144,10 @@ def run_pipeline_cycle():
                 game_stats["stl"], game_stats["blk"], game_stats["fg_pct"],
                 game_stats["fg3m"], game_stats["min"]
             )
-            print(f"[{idx+1}/{total_players}] {full_name} match processed! Price updated: ${current_stored_price} -> ${new_price}")
+            print(f"[{idx+1}/{total_players}] {full_name} processed! Price: ${current_stored_price} -> ${new_price}")
         else:
             new_price = current_stored_price
-            if idx % 40 == 0:
-                print(f"[{idx+1}/{total_players}] Segment check: Seed baseline conserved for inactive roster pools.")
+            print(f"[{idx+1}/{total_players}] {full_name} marked idle. Price conserved.")
 
         # 4. STRUCTURAL TIMELINE ARRAY PROCESSING
         current_time_str = pacific_now.strftime("%I:%M %p")
@@ -191,7 +186,7 @@ def run_pipeline_cycle():
                 "past_price_history": history_payload
             }).eq('id', player_id).execute()
         except Exception as e:
-            print(f" Sync failure on payload execution: {e}")
+            print(f" Sync failure on payload execution for {full_name}: {e}")
 
         time.sleep(random.uniform(1.0, 2.2))
 
